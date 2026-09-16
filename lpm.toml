@@ -1,0 +1,51 @@
+schema_version = 1
+
+[project]
+package = "lilygo-ui-youtube"
+version = "0.1.0"
+app_id = "cc.lilygo.ui.YouTube"
+title = "YouTube"
+summary = "Search and watch YouTube on LILYGO devices"
+description = "A standalone YouTube client with native search and video playback."
+license = "MIT"
+source_repo = "https://github.com/LILYGO-UI/template"
+homepage = "https://github.com/LILYGO-UI/template"
+categories = ["Multimedia"]
+
+[[project.authors]]
+name = "lbuque"
+email = "110239031@qq.com"
+
+[project.assets]
+icon = "assets/app-icon.png"
+
+[[project.assets.screenshots]]
+path = "assets/previews/preview1.png"
+caption = "Native YouTube video playback"
+
+[[project.permissions]]
+id = "network"
+reason = "Access online application data"
+
+[[project.permissions]]
+id = "filesystem"
+access = "read-write"
+scope = "app-data"
+reason = "Store application settings"
+
+[project.compatibility]
+architectures = ["arm64"]
+min_appkit_version = "0.1.0"
+
+[project.launcher]
+order = 90
+
+[build]
+host_preset = "host-simulator"
+cross_preset = "cm0-cross"
+package_dir = "dist"
+
+[deploy]
+host = "192.168.8.206"
+user = "pi"
+port = 22
