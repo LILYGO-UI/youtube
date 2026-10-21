@@ -1,5 +1,6 @@
 #include "fakes.hpp"
 #include "pages/youtube/youtube_view.hpp"
+#include <cm0/status_bar.h>
 #include <cm0/typography.h>
 #include <algorithm>
 #include <cassert>
@@ -12,6 +13,56 @@
 namespace {
 std::vector<lv_color32_t> framebuffer;
 int display_width;
+
+struct RenderChrome {
+    lv_obj_t *status_bar = nullptr;
+    lv_obj_t *content    = nullptr;
+    lv_obj_t *home       = nullptr;
+};
+
+RenderChrome create_render_chrome()
+{
+    RenderChrome chrome;
+    auto *screen = lv_screen_active();
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0xf2f2f7), 0);
+    lv_obj_set_style_bg_grad_dir(screen, LV_GRAD_DIR_NONE, 0);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(screen, 36, 0);
+    lv_obj_set_style_clip_corner(screen, true, 0);
+
+    auto *system_layer = lv_layer_top();
+    chrome.status_bar = cm0_status_bar_create(system_layer);
+    assert(chrome.status_bar);
+    lv_obj_align(chrome.status_bar, LV_ALIGN_TOP_MID, 0, 0);
+
+    chrome.content = lv_obj_create(screen);
+    lv_obj_set_size(chrome.content, LV_PCT(100), LV_PCT(100));
+    lv_obj_align(chrome.content, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_pad_top(chrome.content, CM0_STATUS_BAR_HEIGHT, 0);
+    lv_obj_set_style_border_width(chrome.content, 0, 0);
+    lv_obj_set_style_radius(chrome.content, 0, 0);
+    lv_obj_set_style_bg_color(chrome.content, lv_color_hex(0xf2f2f7), 0);
+    lv_obj_set_style_bg_grad_dir(chrome.content, LV_GRAD_DIR_NONE, 0);
+    lv_obj_set_style_bg_opa(chrome.content, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(chrome.content, LV_OBJ_FLAG_SCROLLABLE);
+
+    chrome.home = cm0_home_indicator_create(system_layer);
+    assert(chrome.home);
+    lv_obj_set_size(chrome.home, LV_PCT(100), 38);
+    lv_obj_align(chrome.home, LV_ALIGN_BOTTOM_MID, 0, -3);
+    lv_obj_clear_flag(chrome.home, static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_SCROLLABLE |
+                                                               LV_OBJ_FLAG_CLICKABLE));
+    return chrome;
+}
+
+void destroy_render_chrome(RenderChrome &chrome)
+{
+    if (chrome.content) lv_obj_delete(chrome.content);
+    if (chrome.status_bar) lv_obj_delete(chrome.status_bar);
+    if (chrome.home) lv_obj_delete(chrome.home);
+    chrome = {};
+}
+
 void flush(lv_display_t *display, const lv_area_t *area, std::uint8_t *pixels)
 {
     const int width    = area->x2 - area->x1 + 1;
@@ -114,12 +165,13 @@ int main(int argc, char **argv)
     lv_display_set_buffers(display, draw_buffer.data(), nullptr, draw_buffer.size() * 4,
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(display, flush);
+    auto chrome = create_render_chrome();
     if (argc == 5) {
         {
             const bool recommendations = std::strcmp(argv[4], "recommendations") == 0;
             YoutubeViewModel vm(std::make_unique<YoutubeService>(), std::make_unique<MpvPlayer>(true));
             YoutubeView view(vm);
-            view.create(lv_screen_active());
+            view.create(chrome.content);
             auto *query = lv_obj_find_by_name(lv_screen_active(), "search_query");
             if (recommendations)
                 vm.recommendations();
@@ -182,6 +234,7 @@ int main(int argc, char **argv)
                 std::printf("PASS: live search, thumbnail and embedded YouTube playback\n");
             }
         }
+        destroy_render_chrome(chrome);
         lv_display_delete(display);
         lilygo_ui_fonts_deinit();
         lv_deinit();
@@ -190,11 +243,112 @@ int main(int argc, char **argv)
     {
         auto search   = std::make_unique<FakeSearch>();
         auto *service = search.get();
+        YoutubeViewModel vm(std::move(search), std::make_unique<FakePlayer>());
+        YoutubeView view(vm);
+        view.create(chrome.content);
+        auto find = [](const char *name) {
+            auto *object = lv_obj_find_by_name(lv_screen_active(), name);
+            assert(object);
+            return object;
+        };
+        // Match the runtime's default keypad group so opening search also
+        // exercises the first character typed through a hardware keyboard.
+        auto *input_group = lv_group_create();
+        lv_group_set_default(input_group);
+
+        // A search must replace an in-flight recommendation request, and the
+        // search page must focus the query field so its cursor is visible.
+        vm.recommendations();
+        lv_obj_send_event(find("search_open"), LV_EVENT_CLICKED, nullptr);
+        assert(!lv_obj_has_flag(find("search_page"), LV_OBJ_FLAG_HIDDEN));
+        assert(lv_obj_has_state(find("search_query"), LV_STATE_FOCUSED));
+        assert(!lv_obj_has_flag(find("search_keyboard"), LV_OBJ_FLAG_HIDDEN));
+        assert(lv_group_get_focused(input_group) == find("search_query"));
+        const uint32_t character = 'A';
+        assert(lv_group_send_data(input_group, character) == LV_RESULT_OK);
+        assert(std::string(lv_textarea_get_text(find("search_query"))) == "A");
+        lv_textarea_set_text(find("search_query"), "during loading");
+        lv_obj_send_event(find("search_submit"), LV_EVENT_CLICKED, nullptr);
+        assert(service->query == "during loading");
+        assert(vm.model().searching && !vm.model().recommending);
+        view.destroy();
+        lv_group_set_default(nullptr);
+        lv_group_delete(input_group);
+    }
+    {
+        auto search   = std::make_unique<FakeSearch>();
+        auto *service = search.get();
+        YoutubeViewModel vm(std::move(search), std::make_unique<FakePlayer>());
+        YoutubeView view(vm);
+        view.create(chrome.content);
+        auto find = [](const char *name) {
+            auto *object = lv_obj_find_by_name(lv_screen_active(), name);
+            assert(object);
+            return object;
+        };
+
+        // Search and playback are top-level pages. The search result list is
+        // moved into the search page so the query bar remains visible after
+        // submitting a query.
+        auto *search_page = find("search_page");
+        auto *player      = find("player");
+        assert(lv_obj_get_parent(search_page) == lv_obj_get_parent(player));
+        assert(lv_obj_has_flag(search_page, LV_OBJ_FLAG_HIDDEN));
+        assert(lv_obj_has_flag(player, LV_OBJ_FLAG_HIDDEN));
+
+        lv_obj_send_event(find("search_open"), LV_EVENT_CLICKED, nullptr);
+        assert(!lv_obj_has_flag(search_page, LV_OBJ_FLAG_HIDDEN));
+        assert(!lv_obj_has_flag(find("search_query"), LV_OBJ_FLAG_HIDDEN));
+
+        lv_textarea_set_text(find("search_query"), "Open movie");
+        lv_obj_send_event(find("search_submit"), LV_EVENT_CLICKED, nullptr);
+        assert(service->query == "Open movie");
+        assert(vm.model().searching && !vm.model().recommending);
+
+        service->updates.push_back(sample_results());
+        vm.poll();
+        assert(!vm.model().searching);
+        assert(!lv_obj_has_flag(search_page, LV_OBJ_FLAG_HIDDEN));
+        assert(!lv_obj_has_flag(find("search_query"), LV_OBJ_FLAG_HIDDEN));
+        assert(!lv_obj_has_flag(find("search_results"), LV_OBJ_FLAG_HIDDEN));
+        assert(lv_obj_get_parent(find("search_results")) == search_page);
+        assert(std::string(lv_textarea_get_text(find("search_query"))) == "Open movie");
+
+        lv_obj_send_event(find("video_card"), LV_EVENT_CLICKED, nullptr);
+        assert(vm.model().watching);
+        assert(!lv_obj_has_flag(player, LV_OBJ_FLAG_HIDDEN));
+        assert(lv_obj_has_flag(search_page, LV_OBJ_FLAG_HIDDEN));
+        assert(lv_obj_has_flag(find("app_header"), LV_OBJ_FLAG_HIDDEN));
+
+        lv_obj_send_event(find("player_back"), LV_EVENT_CLICKED, nullptr);
+        assert(!vm.model().watching);
+        assert(lv_obj_has_flag(player, LV_OBJ_FLAG_HIDDEN));
+        assert(!lv_obj_has_flag(search_page, LV_OBJ_FLAG_HIDDEN));
+        assert(lv_obj_has_flag(find("app_header"), LV_OBJ_FLAG_HIDDEN));
+        assert(!lv_obj_has_flag(find("search_query"), LV_OBJ_FLAG_HIDDEN));
+        assert(!lv_obj_has_flag(find("search_results"), LV_OBJ_FLAG_HIDDEN));
+        assert(std::string(lv_textarea_get_text(find("search_query"))) == "Open movie");
+
+        // Returning from a search result must reopen the editable search page
+        // so another query can be entered without going through home first.
+        lv_obj_send_event(find("search_back"), LV_EVENT_CLICKED, nullptr);
+        assert(!lv_obj_has_flag(search_page, LV_OBJ_FLAG_HIDDEN));
+        assert(lv_obj_has_flag(find("search_results"), LV_OBJ_FLAG_HIDDEN));
+        assert(!lv_obj_has_flag(find("search_keyboard"), LV_OBJ_FLAG_HIDDEN));
+        assert(lv_obj_has_state(find("search_query"), LV_STATE_FOCUSED));
+        assert(std::string(lv_textarea_get_text(find("search_query"))) == "Open movie");
+        lv_textarea_add_text(find("search_query"), " next");
+        assert(std::string(lv_textarea_get_text(find("search_query"))) == "Open movie next");
+        view.destroy();
+    }
+    {
+        auto search   = std::make_unique<FakeSearch>();
+        auto *service = search.get();
         auto player   = std::make_unique<FakePlayer>();
         auto *backend = player.get();
         YoutubeViewModel vm(std::move(search), std::move(player));
         YoutubeView view(vm);
-        view.create(lv_screen_active());
+        view.create(chrome.content);
         auto find = [](const char *name) {
             auto *object = lv_obj_find_by_name(lv_screen_active(), name);
             assert(object);
@@ -203,7 +357,6 @@ int main(int argc, char **argv)
         vm.recommendations();
         assert(service->recommendation_calls == 1 && vm.model().searching);
         assert(lv_obj_has_state(find("feed_more"), LV_STATE_DISABLED));
-        assert(lv_obj_has_state(find("feed_refresh"), LV_STATE_DISABLED));
         assert(lv_obj_has_flag(find("feed_home"), LV_OBJ_FLAG_HIDDEN));
         assert(std::string(lv_label_get_text(find("search_status"))) == "Loading recommendations...");
         lv_obj_send_event(find("search_submit"), LV_EVENT_CLICKED, nullptr);
@@ -216,7 +369,6 @@ int main(int argc, char **argv)
         auto *results = find("search_results");
         check_feed(results, 10, width, height);
         within(find("search_query"), width, height);
-        within(find("feed_refresh"), width, height);
         within(find("feed_more"), width, height);
         capture(display, std::string(argv[3]) + "-home.ppm", width, height);
         auto *first_card = find("video_card");
@@ -263,8 +415,9 @@ int main(int argc, char **argv)
         lv_textarea_set_text(find("search_query"), "Open movie");
         lv_obj_send_event(find("search_submit"), LV_EVENT_CLICKED, nullptr);
         assert(service->query == "Open movie");
-        assert(!lv_obj_has_flag(find("feed_home"), LV_OBJ_FLAG_HIDDEN));
-        assert(lv_obj_has_flag(find("feed_refresh"), LV_OBJ_FLAG_HIDDEN));
+        assert(!lv_obj_has_flag(find("search_page"), LV_OBJ_FLAG_HIDDEN));
+        assert(!lv_obj_has_flag(find("search_query"), LV_OBJ_FLAG_HIDDEN));
+        assert(lv_obj_has_flag(find("feed_home"), LV_OBJ_FLAG_HIDDEN));
         assert(lv_obj_has_flag(find("feed_more"), LV_OBJ_FLAG_HIDDEN));
         service->updates.push_back(sample_results());
         vm.poll();
@@ -274,6 +427,7 @@ int main(int argc, char **argv)
         capture(display, argv[3], width, height);
         lv_obj_send_event(find("search_query"), LV_EVENT_CLICKED, nullptr);
         lv_obj_update_layout(lv_screen_active());
+        assert(lv_obj_has_state(find("search_query"), LV_STATE_FOCUSED));
         within(find("search_keyboard"), width, height);
         capture(display, std::string(argv[3]) + "-keyboard.ppm", width, height);
         lv_obj_send_event(find("search_keyboard"), LV_EVENT_CANCEL, nullptr);
@@ -315,14 +469,6 @@ int main(int argc, char **argv)
         service->updates.push_back(home_results());
         vm.poll();
         check_feed(results, 10, width, height);
-        lv_obj_send_event(find("feed_refresh"), LV_EVENT_CLICKED, nullptr);
-        assert(service->recommendation_calls == recommendation_calls + 2);
-        assert(vm.model().searching && vm.model().videos.empty());
-        service->updates.push_back(error);
-        vm.poll();
-        assert(!lv_obj_has_state(find("feed_refresh"), LV_STATE_DISABLED));
-        assert(!lv_obj_has_state(find("feed_more"), LV_STATE_DISABLED));
-        assert(std::string(lv_label_get_text(find("search_status"))) == error.error);
         lv_obj_send_event(find("feed_more"), LV_EVENT_CLICKED, nullptr);
         service->updates.push_back(home_results());
         vm.poll();
@@ -330,6 +476,7 @@ int main(int argc, char **argv)
         view.destroy();
         view.destroy();
     }
+    destroy_render_chrome(chrome);
     lv_display_delete(display);
     lilygo_ui_fonts_deinit();
     lv_deinit();

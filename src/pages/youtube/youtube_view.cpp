@@ -7,6 +7,7 @@
 #include <cm0/typography.h>
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 
 namespace {
 // Brand accent for the YouTube mark and primary playback control, fully opaque.
@@ -55,7 +56,6 @@ lv_obj_t *button(lv_obj_t *parent, const char *icon, const char *name, lv_event_
     if (std::strcmp(name, "player_rewind") == 0) hint = "Back 10 seconds";
     if (std::strcmp(name, "player_forward") == 0) hint = "Forward 10 seconds";
     if (std::strcmp(name, "feed_home") == 0) hint = "Recommendations";
-    if (std::strcmp(name, "feed_refresh") == 0) hint = "Refresh recommendations";
     auto *tooltip = label(object, hint, 14);
     lv_obj_set_style_bg_color(tooltip, lv_color_hex(components::color_action), 0);
     lv_obj_set_style_bg_opa(tooltip, LV_OPA_COVER, 0);
@@ -136,22 +136,26 @@ lv_obj_t *YoutubeView::create(lv_obj_t *parent)
     auto *title = label(header_, "YouTube", 28);
     lv_obj_set_name_static(title, "app_title");
     lv_obj_set_flex_grow(title, 1);
-    quality_ = lv_dropdown_create(header_);
-    font(quality_, 22);
-    lv_dropdown_set_options(quality_, "1080p\n720p\n480p\n360p\n240p");
-    lv_dropdown_set_selected(quality_, 1);
-    lv_obj_set_width(quality_, 138);
-    lv_obj_set_style_text_color(quality_, lv_color_hex(muted), 0);
-    lv_obj_set_name_static(quality_, "quality");
-    lv_obj_add_event_cb(quality_, event, LV_EVENT_VALUE_CHANGED, this);
+    open_search_button_ = button(header_, search_symbol, "search_open", event, this);
 
     browse_ = band(surface_, LV_FLEX_FLOW_COLUMN, 16);
     lv_obj_set_flex_grow(browse_, 1);
     lv_obj_set_style_min_height(browse_, 0, 0);
+    lv_obj_set_style_pad_top(browse_, 8, 0);
     lv_obj_set_style_pad_bottom(browse_, 42, 0);
     search_bar_  = band(browse_, LV_FLEX_FLOW_ROW);
     home_button_ = button(search_bar_, LV_SYMBOL_HOME, "feed_home", event, this);
-    query_       = lv_textarea_create(search_bar_);
+
+    // Keep the search surface as a sibling of the home and player surfaces.
+    // This makes the search flow a real page: its own bar and results remain
+    // visible after submitting a query instead of being folded into home.
+    search_page_ = band(surface_, LV_FLEX_FLOW_COLUMN, 16);
+    lv_obj_set_name_static(search_page_, "search_page");
+    lv_obj_set_flex_grow(search_page_, 1);
+    lv_obj_set_style_min_height(search_page_, 0, 0);
+    search_page_bar_    = band(search_page_, LV_FLEX_FLOW_ROW);
+    search_back_button_ = button(search_page_bar_, LV_SYMBOL_LEFT, "search_back", event, this);
+    query_              = lv_textarea_create(search_page_bar_);
     lv_obj_set_name_static(query_, "search_query");
     lv_textarea_set_one_line(query_, true);
     lv_textarea_set_max_length(query_, 128);
@@ -161,18 +165,31 @@ lv_obj_t *YoutubeView::create(lv_obj_t *parent)
     lv_obj_set_flex_grow(query_, 1);
     lv_obj_set_height(query_, 52);
     lv_obj_add_event_cb(query_, event, LV_EVENT_ALL, this);
-    search_button_     = button(search_bar_, search_symbol, "search_submit", event, this);
-    search_icon_       = lv_obj_get_child(search_button_, 0);
+    search_button_ = button(search_page_bar_, search_symbol, "search_submit", event, this);
+    search_icon_   = lv_obj_get_child(search_button_, 0);
+    history_title_ = label(search_page_, "Search history", 22);
+    history_list_  = band(search_page_, LV_FLEX_FLOW_COLUMN, 0);
+    lv_obj_set_name_static(history_list_, "search_history");
+    lv_obj_set_flex_grow(history_list_, 1);
+    lv_obj_set_style_min_height(history_list_, 0, 0);
+    lv_obj_set_style_pad_gap(history_list_, 8, 0);
+    lv_obj_set_flex_align(history_list_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    visible(search_page_, false);
+    visible(search_page_bar_, false);
+    visible(search_back_button_, false);
+    visible(query_, false);
+    visible(search_button_, false);
+    visible(history_title_, false);
+    visible(history_list_, false);
     auto *feed_heading = feed_heading_ = band(browse_, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(feed_heading, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     auto *feed_summary = band(feed_heading, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_width(feed_summary, 0);
     lv_obj_set_flex_grow(feed_summary, 1);
     lv_obj_set_style_pad_gap(feed_summary, 4, 0);
-    feed_title_ = label(feed_summary, "Recommended", 22);
+    feed_title_ = label(feed_summary, "", 22);
     lv_obj_set_width(feed_title_, LV_PCT(100));
     lv_label_set_long_mode(feed_title_, LV_LABEL_LONG_MODE_DOTS);
-    refresh_button_ = button(feed_heading, LV_SYMBOL_REFRESH, "feed_refresh", event, this);
     status_         = label(feed_summary, "", 14);
     lv_obj_set_name_static(status_, "search_status");
     lv_obj_set_width(status_, LV_PCT(100));
@@ -209,6 +226,15 @@ lv_obj_t *YoutubeView::create(lv_obj_t *parent)
     lv_obj_set_flex_grow(playing_title_, 1);
     lv_label_set_long_mode(playing_title_, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_style_max_height(playing_title_, 56, 0);
+    quality_ = lv_dropdown_create(heading);
+    font(quality_, 22);
+    lv_dropdown_set_options(quality_, "1080p\n720p\n480p\n360p\n240p");
+    lv_dropdown_set_selected(quality_, 1);  // 720p is the default playback ceiling.
+    lv_obj_set_width(quality_, 138);
+    lv_obj_set_style_text_color(quality_, lv_color_hex(muted), 0);
+    lv_obj_set_name_static(quality_, "quality");
+    lv_obj_add_event_cb(quality_, event, LV_EVENT_VALUE_CHANGED, this);
+    visible(quality_, false);
     button(heading, expand_symbol, "player_expand", event, this);
     video_area_ = band(watch_, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_name_static(video_area_, "video_area");
@@ -244,8 +270,10 @@ lv_obj_t *YoutubeView::create(lv_obj_t *parent)
     lv_obj_set_width(seek_, 0);
     lv_obj_set_flex_grow(seek_, 1);
     lv_obj_set_height(seek_, 10);
-    // Keep the knob fully inside the row at both 0% and 100%.
-    lv_obj_set_style_pad_hor(seek_, 6, LV_PART_MAIN);
+    // The default LVGL knob extends 6 px past each side of a 10 px slider.
+    // Leave enough horizontal track inset for it to remain visible at both
+    // 0% and 100%.
+    lv_obj_set_style_pad_hor(seek_, 12, LV_PART_MAIN);
     lv_obj_set_style_pad_ver(seek_, 10, LV_PART_MAIN);
     lv_slider_set_range(seek_, 0, 1000);
     lv_obj_add_event_cb(seek_, event, LV_EVENT_RELEASED, this);
@@ -268,7 +296,7 @@ lv_obj_t *YoutubeView::create(lv_obj_t *parent)
     lv_obj_set_flex_grow(volume_, 1);
     lv_obj_set_height(volume_, 10);
     // Keep the knob fully inside the controls row at the maximum volume.
-    lv_obj_set_style_pad_hor(volume_, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(volume_, 12, LV_PART_MAIN);
     lv_obj_set_style_pad_ver(volume_, 10, LV_PART_MAIN);
     lv_slider_set_range(volume_, 0, 100);
     lv_slider_set_value(volume_, 70, LV_ANIM_OFF);
@@ -308,20 +336,129 @@ void YoutubeView::destroy()
         surface_ = nullptr;
     }
     rows_.clear();
-    header_ = browse_ = search_bar_ = query_ = search_button_ = search_icon_ = status_ = results_ = quality_ = nullptr;
+    header_ = browse_ = search_bar_ = open_search_button_ = search_page_ = search_page_bar_ = search_back_button_ =
+        history_title_ = history_list_ = query_ = search_button_ = search_icon_ = status_ = results_ = quality_ =
+            nullptr;
     keyboard_ = watch_ = playing_title_ = video_area_ = video_ = play_status_ = seek_ = clock_ = nullptr;
     play_button_ = play_icon_ = volume_ = nullptr;
-    feed_title_ = feed_heading_ = home_button_ = refresh_button_ = more_button_ = nullptr;
+    feed_title_ = feed_heading_ = home_button_ = more_button_ = nullptr;
     for (auto &column : columns_) column = nullptr;
     results_width_      = 0;
     results_generation_ = -1;
-    watching_ = fullscreen_ = false;
+    watching_ = fullscreen_ = search_page_active_ = search_results_active_ = false;
+}
+
+void YoutubeView::attach_feed(lv_obj_t *parent)
+{
+    if (!feed_heading_ || !results_ || !more_button_ || !parent) return;
+    if (lv_obj_get_parent(feed_heading_) != parent) lv_obj_set_parent(feed_heading_, parent);
+    if (lv_obj_get_parent(results_) != parent) lv_obj_set_parent(results_, parent);
+    if (lv_obj_get_parent(more_button_) != parent) lv_obj_set_parent(more_button_, parent);
+
+    // Reparenting appends objects to the new parent's child list. Keep the
+    // feed heading, waterfall, and load-more action in that order on either
+    // page.
+    lv_obj_move_to_index(feed_heading_, parent == browse_ ? 1 : 3);
+    lv_obj_move_to_index(results_, parent == browse_ ? 2 : 4);
+    lv_obj_move_to_index(more_button_, parent == browse_ ? 3 : 5);
+    results_width_ = 0;
+    layout_results();
+}
+
+void YoutubeView::show_search_page(bool show)
+{
+    search_page_active_    = show;
+    search_results_active_ = false;
+    attach_feed(show ? search_page_ : browse_);
+
+    // The app header belongs to the home page. Search and playback each have
+    // their own top bar and should occupy the surface independently.
+    visible(header_, !show && !watching_);
+    visible(browse_, !show && !watching_);
+    visible(search_page_, show);
+    visible(search_page_bar_, show);
+    visible(search_back_button_, show);
+    visible(query_, show);
+    visible(search_button_, show);
+    visible(history_list_, show);
+    visible(history_title_, false);
+    visible(search_bar_, !show && !view_model_.model().recommending);
+    visible(feed_heading_, !show);
+    visible(results_, !show && !watching_);
+    visible(more_button_, !show && view_model_.model().recommending);
+    if (show) {
+        rebuild_history();
+        lv_obj_scroll_to_y(history_list_, 0, LV_ANIM_OFF);
+        // Opening the search page should put the insertion point in the
+        // query field immediately.  This also makes the software keyboard
+        // available without requiring a second tap on the field.
+        keyboard(true);
+    } else {
+        keyboard(false);
+    }
+    layout();
+}
+
+void YoutubeView::show_search_results(bool show)
+{
+    if (!search_page_active_) search_page_active_ = true;
+    search_results_active_ = show;
+    attach_feed(show ? search_page_ : browse_);
+    visible(header_, false);
+    visible(browse_, false);
+    visible(search_page_, true);
+    visible(search_page_bar_, true);
+    visible(search_back_button_, true);
+    visible(query_, true);
+    visible(search_button_, true);
+    visible(history_title_, false);
+    visible(history_list_, false);
+    visible(feed_heading_, show);
+    visible(results_, show);
+    visible(more_button_, false);
+    keyboard(false);
+    layout();
+}
+
+void YoutubeView::rebuild_history()
+{
+    if (!history_list_ || !history_title_) return;
+    const auto &history = view_model_.model().search_history;
+    visible(history_title_, search_page_active_ && !search_results_active_ && !history.empty());
+    visible(history_list_, search_page_active_ && !search_results_active_);
+    lv_obj_clean(history_list_);
+    for (const auto &term : history) {
+        auto *item = components::create_button(history_list_, term.c_str(), event, this);
+        lv_obj_set_name_static(item, "search_history_item");
+        lv_obj_set_size(item, LV_SIZE_CONTENT, 40);
+        lv_obj_set_style_shadow_width(item, 0, 0);
+        lv_obj_set_style_pad_hor(item, 16, 0);
+        auto *item_label = lv_obj_get_child(item, 0);
+        font(item_label, 18);
+        lv_obj_set_width(item_label, LV_SIZE_CONTENT);
+        lv_obj_set_style_text_align(item_label, LV_TEXT_ALIGN_LEFT, 0);
+    }
 }
 
 void YoutubeView::keyboard(bool show)
 {
     visible(keyboard_, show);
-    if (!show) lv_obj_remove_state(query_, LV_STATE_FOCUSED);
+    if (show) {
+        // The search field is hidden until the search page opens, so the
+        // runtime's focus collector may not have added it to the default
+        // input group yet. Add and focus it here as well; otherwise a
+        // hardware keypad keeps sending characters to the previous control
+        // and tapping the search field appears to do nothing.
+        if (auto *group = lv_group_get_default()) {
+            if (lv_obj_get_group(query_) != group) lv_group_add_obj(group, query_);
+            if (lv_group_get_focused(group) != query_) lv_group_focus_obj(query_);
+        }
+        lv_obj_add_state(query_, LV_STATE_FOCUSED);
+        lv_textarea_set_cursor_pos(query_, LV_TEXTAREA_CURSOR_LAST);
+    } else {
+        lv_obj_remove_state(query_, LV_STATE_FOCUSED);
+        if (lv_obj_get_group(query_)) lv_group_remove_obj(query_);
+    }
     layout();
 }
 
@@ -342,7 +479,34 @@ void YoutubeView::event(lv_event_t *event)
         self->layout_results();
         return;
     }
-    if (target == self->home_button_ || target == self->refresh_button_) {
+    if (target == self->open_search_button_) {
+        lv_textarea_set_text(self->query_, "");
+        self->show_search_page(true);
+        return;
+    }
+    if (target == self->search_back_button_) {
+        if (self->search_results_active_) {
+            // A result page is still part of the search flow. Return to the
+            // editable search page and keep the current query so another
+            // search can be entered without leaving this flow.
+            self->show_search_page(true);
+        } else {
+            self->show_search_page(false);
+            lv_textarea_set_text(self->query_, "");
+            self->view_model_.recommendations();
+        }
+        return;
+    }
+    if (target != self->search_page_ && lv_obj_get_name(target) &&
+        std::strcmp(lv_obj_get_name(target), "search_history_item") == 0) {
+        auto *text = lv_obj_get_child(target, 0);
+        lv_textarea_set_text(self->query_, text ? lv_label_get_text(text) : "");
+        self->show_search_results(true);
+        self->view_model_.search(lv_textarea_get_text(self->query_));
+        return;
+    }
+    if (target == self->home_button_) {
+        self->show_search_page(false);
         self->keyboard(false);
         lv_textarea_set_text(self->query_, "");
         self->view_model_.recommendations();
@@ -359,7 +523,18 @@ void YoutubeView::event(lv_event_t *event)
         return;
     }
     if (target == self->query_) {
-        if (code == LV_EVENT_FOCUSED || code == LV_EVENT_CLICKED) self->keyboard(true);
+        if (code == LV_EVENT_CLICKED) {
+            if (self->search_page_active_)
+                self->keyboard(true);
+            else
+                self->show_search_page(true);
+        } else if (code == LV_EVENT_FOCUSED && !self->search_page_active_) {
+            self->show_search_page(true);
+        }
+        // LVGL's OK key sends READY to the keyboard first and then to its
+        // textarea. The keyboard handler already submitted and hid the
+        // field, so ignore that second notification.
+        if (code == LV_EVENT_READY && lv_obj_has_flag(self->keyboard_, LV_OBJ_FLAG_HIDDEN)) return;
         if (code != LV_EVENT_READY) return;
     }
     if (target == self->keyboard_ && code == LV_EVENT_CANCEL) {
@@ -367,11 +542,25 @@ void YoutubeView::event(lv_event_t *event)
         return;
     }
     if (target == self->search_button_ || target == self->keyboard_ || target == self->query_) {
+        // The search page's button cancels an in-flight request only when
+        // there is no query to submit.  In particular, an entered query must
+        // replace the initial recommendations request instead of merely
+        // cancelling it and leaving the query untouched.
+        const char *entered_text = lv_textarea_get_text(self->query_);
+        const bool empty_query =
+            !entered_text || std::string(entered_text).find_first_not_of(" \t\n\r") == std::string::npos;
+        const bool cancel = self->view_model_.model().searching && target == self->search_button_ &&
+                            (!self->view_model_.model().recommending || empty_query);
         self->keyboard(false);
-        if (self->view_model_.model().searching && target == self->search_button_)
+        if (cancel)
             self->view_model_.cancel_search();
-        else
+        else {
+            // Keep the search page active after submit. The query bar stays
+            // at the top while the response replaces the history list with
+            // the result waterfall below it.
+            self->show_search_results(true);
             self->view_model_.search(lv_textarea_get_text(self->query_));
+        }
     } else if (target == self->seek_) {
         self->view_model_.seek(lv_slider_get_value(target) / 1000.0 * self->view_model_.playback().duration);
     } else if (target == self->volume_) {
@@ -467,23 +656,53 @@ void YoutubeView::refresh()
     const auto &model = view_model_.model();
     if (watching_ != model.watching) {
         watching_ = model.watching;
-        visible(browse_, !watching_);
+        if (watching_) {
+            // A player is a separate page. Keep the feed attached to its
+            // originating page so returning from playback restores context.
+            visible(search_page_, false);
+            visible(browse_, false);
+        }
         visible(watch_, watching_);
-        visible(quality_, !watching_);
+        visible(quality_, watching_);
+        if (!watching_) {
+            if (search_page_active_) {
+                if (search_results_active_)
+                    show_search_results(true);
+                else
+                    show_search_page(true);
+            } else {
+                attach_feed(browse_);
+                visible(header_, true);
+                visible(browse_, true);
+                visible(search_page_, false);
+                visible(search_bar_, !model.recommending);
+                visible(feed_heading_, true);
+                visible(results_, true);
+                visible(more_button_, model.recommending);
+            }
+        } else {
+            visible(header_, false);
+            visible(open_search_button_, false);
+        }
         fullscreen_ = false;
-        visible(header_, true);
         visible(video_, false);
         keyboard(false);
     }
     lv_label_set_text(status_, model.status.c_str());
-    lv_label_set_text(feed_title_, model.recommending ? "Recommended" : "Search results");
-    visible(home_button_, !model.recommending);
-    visible(refresh_button_, model.recommending);
-    visible(more_button_, model.recommending);
-    if (model.searching)
-        lv_obj_add_state(refresh_button_, LV_STATE_DISABLED);
-    else
-        lv_obj_remove_state(refresh_button_, LV_STATE_DISABLED);
+    visible(status_, !model.status.empty());
+    lv_label_set_text(feed_title_, model.recommending ? "" : "Search results");
+    rebuild_history();
+    // Keep the player control in sync with a quality selected before opening
+    // the video (for example through the launch-time quality setting).
+    static constexpr int heights[] = {1080, 720, 480, 360, 240};
+    const auto quality             = std::find(std::begin(heights), std::end(heights), model.quality);
+    if (quality != std::end(heights))
+        lv_dropdown_set_selected(quality_, static_cast<uint32_t>(quality - std::begin(heights)));
+    visible(home_button_, !search_page_active_ && !model.recommending);
+    visible(search_bar_, !search_page_active_ && !watching_ && !model.recommending);
+    visible(more_button_, !search_page_active_ && model.recommending);
+    const bool show_feed_heading = !watching_ && (!model.recommending || !model.status.empty());
+    visible(feed_heading_, show_feed_heading);
     if (model.searching || !model.can_load_more)
         lv_obj_add_state(more_button_, LV_STATE_DISABLED);
     else
@@ -492,7 +711,7 @@ void YoutubeView::refresh()
                                                          : model.can_load_more
                                                              ? (model.videos.empty() ? "Try again" : "Load more")
                                                              : "All caught up");
-    lv_label_set_text(search_icon_, model.searching ? LV_SYMBOL_CLOSE : search_symbol);
+    lv_label_set_text(search_icon_, model.searching && !model.recommending ? LV_SYMBOL_CLOSE : search_symbol);
     if (results_generation_ != view_model_.results_generation()) {
         results_generation_ = view_model_.results_generation();
         rebuild_results(true);
@@ -549,14 +768,10 @@ void YoutubeView::layout()
     lv_obj_set_style_pad_ver(header_, landscape ? 8 : 16, 0);
     lv_obj_set_style_pad_row(watch_, landscape ? 8 : 12, 0);
     lv_obj_set_height(keyboard_, landscape ? 180 : 260);
-    if (more_button_) {
-        auto *parent = landscape ? feed_heading_ : browse_;
-        if (lv_obj_get_parent(more_button_) != parent) {
-            lv_obj_set_parent(more_button_, parent);
-            if (landscape) lv_obj_move_to_index(more_button_, 1);
-        }
-        lv_obj_set_width(more_button_, landscape ? 176 : LV_PCT(100));
-    }
+    // Keep the load-more action after the complete waterfall in every
+    // orientation. Moving it into the heading in landscape made it look like
+    // a feed control instead of the continuation of the results list.
+    if (more_button_) lv_obj_set_width(more_button_, LV_PCT(100));
 }
 
 void YoutubeView::layout_results()

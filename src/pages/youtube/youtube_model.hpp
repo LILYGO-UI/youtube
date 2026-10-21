@@ -14,6 +14,8 @@ struct Video {
 
 struct YoutubeModel {
     std::string query;
+    // Search terms entered during the current app session, newest first.
+    std::vector<std::string> search_history;
     std::string status = "Ready";
     std::vector<Video> videos;
     bool searching     = false;

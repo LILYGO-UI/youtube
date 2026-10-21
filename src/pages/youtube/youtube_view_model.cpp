@@ -56,6 +56,12 @@ void YoutubeViewModel::search(const std::string &query)
         publish();
         return;
     }
+    // Keep a short, most-recent-first history for the search page. Repeating a
+    // term moves it to the front instead of creating duplicate entries.
+    model_.search_history.erase(std::remove(model_.search_history.begin(), model_.search_history.end(), trimmed),
+                                model_.search_history.end());
+    model_.search_history.insert(model_.search_history.begin(), trimmed);
+    if (model_.search_history.size() > 12) model_.search_history.resize(12);
     model_.query         = trimmed;
     model_.recommending  = false;
     model_.can_load_more = false;
@@ -92,7 +98,6 @@ void YoutubeViewModel::open_video(const std::string &id, const std::string &titl
     model_.watching      = true;
     model_.searching     = false;
     appending_           = false;
-    if (model_.recommending) model_.status = std::to_string(model_.videos.size()) + " videos";
     playback_       = {};
     playback_.state = PlaybackState::Loading;
     player_->stop();
@@ -194,7 +199,7 @@ void YoutubeViewModel::poll()
             model_.searching = false;
             model_.status    = model_.videos.empty()
                                    ? (model_.recommending ? "No recommendations available" : "No results")
-                                   : std::to_string(model_.videos.size()) + " videos";
+                                   : "";
             load_thumbnails();
         } else if (update->kind == SearchUpdate::Kind::Error) {
             if (resolving_) {
