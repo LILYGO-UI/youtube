@@ -6,6 +6,8 @@ project(${LILYGO_UI_CMAKE_PROJECT_NAME} LANGUAGES C CXX)
 include(GNUInstallDirs)
 include(CTest)
 include(cmake/GpuSdk.cmake)
+# Match the 50 Hz panel in LVGL, the statically linked SDK, and this application.
+add_compile_definitions(LV_DEF_REFR_PERIOD=20)
 find_package(LilyGoUI CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
