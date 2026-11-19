@@ -1,7 +1,8 @@
 # Older CM0 BSP releases omit the graphics development packages.
 set(YOUTUBE_GPU_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.cache/gpu-sdk" CACHE PATH
     "Optional EGL/GLES/GBM SDK overlay for cross compilation")
-if(CMAKE_CROSSCOMPILING AND EXISTS "${YOUTUBE_GPU_SDK_ROOT}/usr/include/EGL/egl.h")
+if(CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$" AND
+   EXISTS "${YOUTUBE_GPU_SDK_ROOT}/usr/include/EGL/egl.h")
     foreach(_gpu_api IN ITEMS EGL GLES GBM)
         set(CM0_${_gpu_api}_INCLUDE_DIR "${YOUTUBE_GPU_SDK_ROOT}/usr/include" CACHE PATH
             "CM0 ${_gpu_api} development headers")

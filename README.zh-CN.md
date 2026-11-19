@@ -225,3 +225,15 @@ AppKit 提供设备共享运行时字体。GPU SDK 同步脚本只下载并解�
 应用不内置或重新分发完整媒体栈，运行时库由操作系统提供。
 公开头文件的上游声明和共享 AppKit 字体许可证会随 Debian 软件包安装到
 `/usr/share/doc/lilygo-ui-youtube`。
+
+## K230 Debian 打包
+
+Linux 主机安装 `gcc-riscv64-linux-gnu` 和 `g++-riscv64-linux-gnu`，macOS 主机用 `brew install llvm lld dpkg` 安装交叉编译和打包工具。在应用仓库根目录运行打包命令。
+
+```sh
+lpm pack --arch riscv64
+```
+
+`k230-debian` CMake 预设首次配置时从 `LILYGO-UI/canaan-gen` Release 下载固定版本的 Debian BSP，校验 SHA-256，并将压缩包和 `sysroot/` 保存在当前项目的 `.cache/k230-bsp/20261116T104343Z/`。之后可以离线打包，重新生成 `build/` 也会复用缓存。生成的 `.deb` 在 `dist/` 目录。
+
+执行一次 `lpm set-target k230` 后，后续直接运行 `lpm pack`。如需自定义 Debian sysroot，在首次配置前设置 `LILYGO_UI_DEBIAN_SYSROOT`，或向 CMake 传入 `-DLILYGO_UI_DEBIAN_SYSROOT=/path/to/sysroot`。AppKit 默认使用 `third_party/cm0-appkit`，可用 `-DLilyGoUI_DIR=/path/to/appkit` 指定其他版本。
